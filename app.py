@@ -17,6 +17,7 @@ st.divider()
 # -----------------------------
 questions = [
     {
+        "id": "q1",
         "q": "1. 시험이 끝난 날, 너는 어떤 하루를 보내고 싶어?",
         "options": [
             "조용한 카페에서 감성적으로 하루를 정리한다",
@@ -26,6 +27,7 @@ questions = [
         ],
     },
     {
+        "id": "q2",
         "q": "2. 친구가 갑자기 “오늘 영화 보자!”고 하면?",
         "options": [
             "여운 남는 이야기가 좋아",
@@ -35,6 +37,7 @@ questions = [
         ],
     },
     {
+        "id": "q3",
         "q": "3. 너의 연애 스타일은 영화로 치면?",
         "options": [
             "감정선이 중요하고 서사가 탄탄한 편",
@@ -44,6 +47,7 @@ questions = [
         ],
     },
     {
+        "id": "q4",
         "q": "4. 대학생활에서 가장 기대되는 순간은?",
         "options": [
             "사람들과 깊은 이야기 나누는 밤",
@@ -53,6 +57,7 @@ questions = [
         ],
     },
     {
+        "id": "q5",
         "q": "5. 네가 주인공이라면 어떤 캐릭터일까?",
         "options": [
             "감정을 섬세하게 품고 성장하는 주인공",
@@ -63,35 +68,68 @@ questions = [
     },
 ]
 
-answers = {}
-
+# -----------------------------
+# Session state init
+# -----------------------------
 for item in questions:
-    answers[item["q"]] = st.radio(
+    if item["id"] not in st.session_state:
+        st.session_state[item["id"]] = None
+
+if "submitted" not in st.session_state:
+    st.session_state["submitted"] = False
+
+# -----------------------------
+# Reset handler
+# -----------------------------
+def reset_test():
+    for item in questions:
+        st.session_state[item["id"]] = None
+    st.session_state["submitted"] = False
+
+# -----------------------------
+# Render questions
+# -----------------------------
+for item in questions:
+    st.radio(
         item["q"],
         item["options"],
-        index=None,  # 선택 강제 X (원하면 0으로 바꿔서 기본 선택 가능)
-        key=item["q"],
+        index=None,  # 기본 선택 없음
+        key=item["id"],  # session_state에 저장됨
     )
-    st.write("")  # spacing
+    st.write("")
 
 st.divider()
 
 # -----------------------------
-# Submit
+# Buttons
 # -----------------------------
-col1, col2 = st.columns([1, 2])
+col1, col2 = st.columns(2)
 
 with col1:
-    submit = st.button("결과 보기", use_container_width=True)
+    if st.button("결과 보기", use_container_width=True):
+        st.session_state["submitted"] = True
 
 with col2:
-    st.caption("모든 질문에 답하면 더 정확한 결과를 받을 수 있어요.")
+    st.button("다시 테스트하기", use_container_width=True, on_click=reset_test)
 
-if submit:
-    # 간단한 유효성 검사 (미선택 항목이 있으면 안내)
-    unanswered = [q for q, a in answers.items() if a is None]
+# -----------------------------
+# Results area
+# -----------------------------
+if st.session_state["submitted"]:
+    # 모든 답변 수집
+    collected = []
+    unanswered = []
+
+    for item in questions:
+        ans = st.session_state.get(item["id"])
+        if ans is None:
+            unanswered.append(item["q"])
+        collected.append({"question": item["q"], "answer": ans})
+
     if unanswered:
         st.warning("아직 답하지 않은 질문이 있어요! 모두 선택한 뒤 다시 눌러주세요 😊")
     else:
-        st.info("분석 중...")  # 다음 시간에 API/분석 로직 연결 예정
-
+        st.subheader("🧾 당신의 답변 모아보기")
+        for row in collected:
+            st.markdown(f"**{row['question']}**  \n- {row['answer']}")
+        st.info("분석 중...")
