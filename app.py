@@ -9,6 +9,15 @@ st.set_page_config(page_title="🎬 나와 어울리는 영화는?", page_icon="
 # -----------------------------
 st.sidebar.header("TMDB 설정")
 api_key = st.sidebar.text_input("TMDB API Key", type="password", placeholder="여기에 API Key 입력")
+
+min_rating = st.sidebar.slider(
+    "최소 평점(10점 만점)",
+    min_value=0.0,
+    max_value=10.0,
+    value=6.5,
+    step=0.5,
+)
+
 st.sidebar.caption("키가 없으면 결과를 불러올 수 없어요.")
 
 POSTER_BASE = "https://image.tmdb.org/t/p/w500"
@@ -176,18 +185,41 @@ def decide_genre(answers_by_qid):
     return "drama"
 
 @st.cache_data(show_spinner=False, ttl=600)
-def fetch_popular_movies_by_genre(api_key: str, genre_id: int, n: int = 5):
-    params = {
-        "api_key": api_key,
-        "with_genres": genre_id,
-        "language": "ko-KR",
-        "sort_by": "popularity.desc",
-        "page": 1,
-    }
-    r = requests.get(DISCOVER_URL, params=params, timeout=15)
-    r.raise_for_status()
-    data = r.json()
-    return data.get("results", [])[:n]
+def fetch_movies_by_genre_with_min_rating(api_key: str, genre_id: int, min_rating: float, n: int = 5):
+    """
+    TMDB discover에서 인기순으로 가져오되,
+    사용자가 설정한 최소 평점 이상만 필터링해서 n개를 채움.
+    (페이지를 넘기며 최대 몇 페이지까지 탐색)
+    """
+    collected = []
+    page = 1
+    max_pages = 5  # 너무 많이 돌지 않게 제한
+
+    while len(collected) < n and page <= max_pages:
+        params = {
+            "api_key": api_key,
+            "with_genres": genre_id,
+            "language": "ko-KR",
+            "sort_by": "popularity.desc",
+            "page": page,
+            "vote_average.gte": min_rating,  # TMDB 필터
+        }
+        r = requests.get(DISCOVER_URL, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        results = data.get("results", [])
+
+        # 혹시 API 필터가 느슨할 경우를 대비해 한 번 더 로컬 필터
+        results = [m for m in results if (m.get("vote_average") or 0) >= min_rating]
+
+        collected.extend(results)
+        page += 1
+
+        if not results and page == 2:
+            # 첫 페이지부터 비었다면 더 탐색해도 의미 없을 가능성이 큼
+            break
+
+    return collected[:n]
 
 def short_overview(text: str, max_len: int = 120) -> str:
     text = (text or "").strip()
@@ -243,7 +275,12 @@ if st.session_state["submitted"]:
     # 2) TMDB 호출 (spinner)
     with st.spinner("분석 중..."):
         try:
-            movies = fetch_popular_movies_by_genre(api_key, genre_id, n=5)
+            movies = fetch_movies_by_genre_with_min_rating(
+                api_key=api_key,
+                genre_id=genre_id,
+                min_rating=min_rating,
+                n=5,
+            )
         except requests.HTTPError as e:
             st.error("TMDB API 요청에 실패했어요. API Key가 올바른지 확인해 주세요.")
             st.exception(e)
@@ -254,13 +291,12 @@ if st.session_state["submitted"]:
             st.stop()
 
     if not movies:
-        st.info("해당 장르에서 영화를 찾지 못했어요. 다른 답변으로 다시 시도해볼까요?")
+        st.info(f"최소 평점 {min_rating:.1f} 이상인 영화가 부족해요. 최소 평점을 낮춰서 다시 시도해볼까요?")
         st.stop()
 
     # 3) 결과 제목
     st.subheader(f"🎉 당신에게 딱인 장르는: {genre_label}!")
-    st.caption("아래는 해당 장르에서 요즘 인기가 많은 영화들이에요. (TMDB 기준)")
-
+    st.caption(f"최소 평점 **{min_rating:.1f}** 이상인 인기 영화만 골랐어요. (TMDB 기준)")
     st.write("")
 
     # 4) 영화 카드 3열 표시
@@ -283,8 +319,10 @@ if st.session_state["submitted"]:
                 st.markdown(f"**{title}**")
                 st.caption(f"⭐ 평점: {vote:.1f}" if vote is not None else "⭐ 평점: 정보 없음")
 
-                # 5) 상세 정보(expander)
                 with st.expander("상세 보기"):
                     st.write(short_overview(overview, max_len=700))
                     st.markdown("**이 영화를 추천하는 이유**")
-                    st.write(f"당신의 답변 결과가 **{genre_label}** 분위기와 잘 맞아서, 이 장르에서 인기 높은 작품을 골랐어요.")
+                    st.write(
+                        f"당신의 답변 결과가 **{genre_label}** 분위기와 잘 맞고, "
+                        f"평점이 **{min_rating:.1f}** 이상인 작품이라 추천해요."
+                    )
