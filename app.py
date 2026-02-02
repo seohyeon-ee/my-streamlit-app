@@ -97,16 +97,11 @@ CONTINENT_TO_COUNTRIES = {
 }
 
 # -----------------------------
-# Global CSS (질문 카드/결과 하이라이트)
+# UI CSS (결과 하이라이트 + 카드)
 # -----------------------------
 st.markdown(
     """
     <style>
-      /* 질문 카드 안쪽 여백 + 둥근 모서리 느낌 (container(border=True)와 함께 사용) */
-      .q-card h4 { margin-bottom: 0.25rem; }
-      .q-card p  { margin-top: 0.1rem; }
-
-      /* 결과 배너 */
       .result-banner{
         padding: 16px 18px;
         border-radius: 16px;
@@ -125,8 +120,6 @@ st.markdown(
         opacity: 0.9;
         margin: 0;
       }
-
-      /* 영화 카드 제목 줄바꿈 방지(깔끔) */
       .movie-title{
         display: -webkit-box;
         -webkit-line-clamp: 2;
@@ -134,27 +127,13 @@ st.markdown(
         overflow: hidden;
         min-height: 3.0em;
       }
+      .step-card h3{
+        margin: 0 0 6px 0;
+      }
     </style>
     """,
     unsafe_allow_html=True,
 )
-
-def selected_country_codes_from_continents(conts):
-    if not conts or "전체" in conts:
-        return set()
-    codes = set()
-    for c in conts:
-        codes.update(CONTINENT_TO_COUNTRIES.get(c, []))
-    return codes
-
-# -----------------------------
-# Header
-# -----------------------------
-st.title("🎬 나와 어울리는 영화는?")
-st.write("5개의 질문에 답하면, 당신과 어울리는 영화 스타일을 추천해드려요! 🎞️✨")
-st.caption("※ 결과는 TMDB 인기 영화 데이터를 기반으로 추천합니다.")
-
-st.divider()
 
 # -----------------------------
 # 질문(선택지에 장르 명시 X)
@@ -212,23 +191,38 @@ questions = [
     },
 ]
 
+TOTAL_STEPS = len(questions)
+
 # -----------------------------
 # Session state init
 # -----------------------------
 for item in questions:
     if item["id"] not in st.session_state:
         st.session_state[item["id"]] = None
+
+if "step" not in st.session_state:
+    st.session_state["step"] = 0  # 0-based index
+
 if "submitted" not in st.session_state:
     st.session_state["submitted"] = False
 
 def reset_test():
     for item in questions:
         st.session_state[item["id"]] = None
+    st.session_state["step"] = 0
     st.session_state["submitted"] = False
 
 # -----------------------------
-# 성향/장르 결정
+# 유틸
 # -----------------------------
+def selected_country_codes_from_continents(conts):
+    if not conts or "전체" in conts:
+        return set()
+    codes = set()
+    for c in conts:
+        codes.update(CONTINENT_TO_COUNTRIES.get(c, []))
+    return codes
+
 def option_to_trait(q_item, selected_text):
     for text, trait in q_item["options"]:
         if text == selected_text:
@@ -256,6 +250,7 @@ def decide_genre(answers_by_qid):
     counts = Counter(traits)
     top_trait, _ = counts.most_common(1)[0]
 
+    # 동점: rd > aa > sf > co
     top_count = counts[top_trait]
     tied = [t for t, c in counts.items() if c == top_count]
     if len(tied) > 1:
@@ -282,6 +277,16 @@ def short_overview(text: str, max_len: int = 120) -> str:
     if not text:
         return "줄거리 정보가 없어요."
     return text if len(text) <= max_len else text[:max_len].rstrip() + "…"
+
+def build_reason(min_rating: float, release_start: str, release_end: str, runtime_min: int, runtime_max: int, conts):
+    parts = [
+        f"평점 **{min_rating:.1f}** 이상",
+        f"개봉일 **{release_start} ~ {release_end}**",
+        f"러닝타임 **{runtime_min}~{runtime_max}분**",
+    ]
+    if conts and "전체" not in conts:
+        parts.append(f"제작국가(대륙) **{', '.join(conts)}**")
+    return " · ".join(parts)
 
 # -----------------------------
 # TMDB 호출(캐시)
@@ -324,17 +329,6 @@ def runtime_match(detail: dict, rt_min: int, rt_max: int, include_unknown: bool)
 
 def rating_match(movie: dict, min_rating: float) -> bool:
     return (movie.get("vote_average") or 0.0) >= float(min_rating)
-
-def build_reason(genre_label: str, min_rating: float, release_start: str, release_end: str,
-                 runtime_min: int, runtime_max: int, conts) -> str:
-    parts = [
-        f"평점 **{min_rating:.1f}** 이상",
-        f"개봉일 **{release_start} ~ {release_end}**",
-        f"러닝타임 **{runtime_min}~{runtime_max}분**",
-    ]
-    if conts and "전체" not in conts:
-        parts.append(f"제작국가(대륙) **{', '.join(conts)}**")
-    return " · ".join(parts)
 
 def fetch_movies_with_filters(
     api_key: str,
@@ -396,47 +390,79 @@ def fetch_movies_with_filters(
     return collected
 
 # -----------------------------
-# 질문 UI: "박스 안" + "세로 두 줄(=2열)" 배열
+# Header
 # -----------------------------
-st.subheader("📝 질문에 답해주세요")
-
-qcols = st.columns(2, gap="large")
-for idx, item in enumerate(questions):
-    col = qcols[idx % 2]
-    with col:
-        with st.container(border=True):
-            st.markdown(f"<div class='q-card'><h4>{item['q']}</h4></div>", unsafe_allow_html=True)
-            option_texts = [t for t, _ in item["options"]]
-            st.radio(
-                label="",
-                options=option_texts,
-                index=None,
-                key=item["id"],
-                label_visibility="collapsed",
-            )
-
+st.title("🎬 나와 어울리는 영화는?")
+st.write("질문을 **한 단계씩** 풀어가면, 당신에게 어울리는 영화 스타일을 추천해드려요! 🎞️✨")
+st.caption("※ 결과는 TMDB 인기 영화 데이터를 기반으로 추천합니다.")
 st.divider()
 
 # -----------------------------
-# Buttons
+# 단계형 UI + 진행바
 # -----------------------------
-b1, b2 = st.columns(2)
-with b1:
-    if st.button("결과 보기", use_container_width=True):
-        st.session_state["submitted"] = True
-with b2:
-    st.button("다시 테스트하기", use_container_width=True, on_click=reset_test)
+if not st.session_state["submitted"]:
+    step = st.session_state["step"]
+    current = questions[step]
+
+    # 진행바 (0~1)
+    st.progress((step + 1) / TOTAL_STEPS, text=f"진행도: {step + 1} / {TOTAL_STEPS}")
+
+    with st.container(border=True):
+        st.markdown(
+            f"<div class='step-card'><h3>📝 {current['q']}</h3>"
+            f"<p style='opacity:0.85;margin:0;'>아래에서 하나를 선택해 주세요.</p></div>",
+            unsafe_allow_html=True,
+        )
+        option_texts = [t for t, _ in current["options"]]
+        st.radio(
+            label="",
+            options=option_texts,
+            index=None,
+            key=current["id"],
+            label_visibility="collapsed",
+        )
+
+    st.write("")
+    c1, c2, c3 = st.columns([1, 1, 1])
+
+    # 이전
+    with c1:
+        prev_disabled = step == 0
+        if st.button("⬅️ 이전", use_container_width=True, disabled=prev_disabled):
+            st.session_state["step"] = max(0, step - 1)
+            st.rerun()
+
+    # 다시하기
+    with c2:
+        st.button("🔄 다시 테스트하기", use_container_width=True, on_click=reset_test)
+
+    # 다음 / 결과보기
+    with c3:
+        selected = st.session_state.get(current["id"])
+        if step < TOTAL_STEPS - 1:
+            if st.button("다음 ➡️", use_container_width=True, disabled=(selected is None)):
+                st.session_state["step"] = min(TOTAL_STEPS - 1, step + 1)
+                st.rerun()
+        else:
+            # 마지막 단계
+            if st.button("🎯 결과 보기", use_container_width=True, disabled=(selected is None)):
+                # 마지막 문항도 선택되었는지 최종 확인
+                answers_by_qid = {q["id"]: st.session_state.get(q["id"]) for q in questions}
+                unanswered = [q for q in questions if not answers_by_qid.get(q["id"])]
+                if unanswered:
+                    st.warning("아직 답하지 않은 질문이 있어요. 이전으로 돌아가서 선택해 주세요 😊")
+                else:
+                    st.session_state["submitted"] = True
+                    st.rerun()
 
 # -----------------------------
-# Results
+# 결과 화면
 # -----------------------------
 if st.session_state["submitted"]:
-    answers_by_qid = {q["id"]: st.session_state.get(q["id"]) for q in questions}
-    unanswered = [q for q in questions if not answers_by_qid.get(q["id"])]
-
-    if unanswered:
-        st.warning("아직 답하지 않은 질문이 있어요! 모든 질문에 답한 뒤 다시 눌러주세요 😊")
+    if st.button("🔄 다시 테스트하기", use_container_width=True, on_click=reset_test):
         st.stop()
+
+    answers_by_qid = {q["id"]: st.session_state.get(q["id"]) for q in questions}
 
     if not api_key:
         st.error("사이드바에 TMDB API Key를 입력해 주세요.")
@@ -478,14 +504,11 @@ if st.session_state["submitted"]:
         )
         st.stop()
 
-    # -----------------------------
-    # 결과를 더 눈에 띄게: 배너 + 메트릭
-    # -----------------------------
     st.markdown(
         f"""
         <div class="result-banner">
           <div class="title">🔥 당신에게 딱인 장르는: {genre_label}!</div>
-          <p class="meta">{build_reason(genre_label, min_rating, release_start.isoformat(), release_end.isoformat(), runtime_min, runtime_max, selected_continents)}</p>
+          <p class="meta">{build_reason(min_rating, release_start.isoformat(), release_end.isoformat(), runtime_min, runtime_max, selected_continents)}</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -497,10 +520,6 @@ if st.session_state["submitted"]:
     m3.metric("추천 개수", f"{len(movies)}편")
 
     st.write("")
-
-    # -----------------------------
-    # 영화 카드 3열 표시
-    # -----------------------------
     st.subheader("🎥 추천 영화 TOP 5")
 
     cols = st.columns(3, gap="large")
